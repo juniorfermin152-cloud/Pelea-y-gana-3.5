@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pelea y Gana 3.0</title>
+<style>
+body { margin:0; overflow:hidden; font-family:Arial; background:#111; touch-action:none; }
+canvas { display:block; margin:auto; background:#111; border:2px solid white; }
+#startScreen, #gameOverScreen {
+  position:absolute; top:0; left:0; width:100%; height:100%; display:flex; flex-direction:column;
+  justify-content:center; align-items:center; background:rgba(0,0,0,0.9); color:white;
+}
+button { padding:15px 30px; font-size:20px; cursor:pointer; margin-top:20px; }
+#controls {
+  position:absolute; bottom:10px; left:50%; transform:translateX(-50%);
+  display:flex; gap:10px;
+}
+.controlBtn {
+  width:60px; height:60px; border-radius:50%; background:rgba(255,255,255,0.3); font-size:20px;
+  color:white; display:flex; justify-content:center; align-items:center;
+  user-select:none;
+}
+</style>
+</head>
+<body>
+
+<div id="startScreen">
+  <h1>Pelea y Gana 3.0</h1>
+  <p id="loadingText">Cargando sprites...</p>
+  <button id="startBtn" disabled>Jugar</button>
+</div>
+
+<div id="gameOverScreen" style="display:none;">
+  <h1>¡Juego Terminado!</h1>
+  <p id="finalScore"></p>
+  <button id="restartBtn">Reiniciar</button>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<div id="controls">
+  <div class="controlBtn" id="up">↑</div>
+  <div class="controlBtn" id="left">←</div>
+  <div class="controlBtn" id="shoot">•</div>
+  <div class="controlBtn" id="right">→</div>
+  <div class="controlBtn" id="down">↓</div>
+</div>
+
+<script>
+// Canvas adaptable
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+function resizeCanvas(){
+    canvas.width = window.innerWidth > 800 ? 800 : window.innerWidth;
+    canvas.height = window.innerHeight > 500 ? 500 : window.innerHeight;
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+
+// Sprites
+const playerImg = new Image(); playerImg.src = "images/player.png";
+const enemyImg = new Image(); enemyImg.src = "images/enemy.png";
+
+// Cargar sprites
+let assetsLoaded = 0;
+const totalAssets = 2;
+const loadingText = document.getElementById("loadingText");
+playerImg.onload = enemyImg.onload = function(){
+    assetsLoaded++;
+    loadingText.textContent = `Cargando sprites... (${assetsLoaded}/${totalAssets})`;
+    if(assetsLoaded === totalAssets){
+        loadingText.textContent = "¡Listo!";
+        document.getElementById("startBtn").disabled = false;
+    }
+};
+
+// Jugador
+const player = { x:100, y:250, w:50, h:50, speed:5, shootCooldown:0 };
+
+// Enemigos
+let enemies = [];
+let enemySpeed = 2, spawnInterval = 2000;
+
+// Balas
+let bullets = [], bulletSpeed = 7;
+let enemyBullets = [], enemyBulletSpeed = 5;
+
+// Partículas
+let particles = [];
+
+// Puntos y niveles
+let score = 0, level = 1, nextLevelScore = 100;
+
+// Estado
+let gameRunning = false;
+
+// Sonidos
+const bgMusic = new Audio("audio/bgMusic.mp3"); bgMusic.loop = true; bgMusic.volume = 0.3;
+const shootSound = new Audio("audio/shoot.mp3");
+const hitSound = new Audio("audio/hit.mp3");
+
+// Teclado
+const keys = {};
+window.addEventListener("keydown", e=>keys[e.key.toLowerCase()]=true);
+window.addEventListener("keyup", e=>keys[e.key.toLowerCase()]=false);
+
+// Controles táctiles
+const touchMap = {};
+["up","down","left","right","shoot"].forEach(id=>{
+    let btn=document.getElementById(id);
+    btn.addEventListener("touchstart", e=>{ touchMap[id]=true; e.preventDefault(); });
+    btn.addEventListener("touchend", e=>{ touchMap[id]=false; e.preventDefault(); });
+});
+
+// Funciones
+function isColliding(a,b){ return a.x < b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
+function createParticles(x,y,color,count){ for(let i=0;i<count;i++){ particles.push({x:x,y:y,vx:(Math.random()-0.5)*4,vy:(Math.random()-0.5)*4,alpha:1,color:color,size:Math.random()*4+2}); } }
+function updateParticles(){ for(let i=particles.length-1;i>=0;i--){ let p=particles[i]; p.x+=p.vx;p.y+=p.vy;p.alpha-=0.03; if(p.alpha<=0) particles.splice(i,1); } }
+function drawParticles(){ for(let p of particles){ ctx.globalAlpha=p.alpha; ctx.fillStyle=p.color; ctx.fillRect(p.x,p.y,p.size,p.size); } ctx.globalAlpha=1; }
+function updateLevel(){ if(score>=nextLevelScore){ level++; enemySpeed+=0.5; spawnInterval-=150; if(spawnInterval<500) spawnInterval=500; nextLevelScore+=50; createParticles(canvas.width/2,canvas.height/2,"yellow",50); } }
+function spawnEnemy(){ if(!gameRunning) return; enemies.push({ x:canvas.width-60, y:Math.random()*(canvas.height-50), w:50, h:50, speed:enemySpeed, shootTimer:Math.floor(Math.random()*100) }); }
+
+function update(){
+    if(!gameRunning) return;
+    ctx.fillStyle="#222"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    if(keys["w"] || touchMap["up"]) player.y-=player.speed;
+    if(keys["s"] || touchMap["down"]) player.y+=player.speed;
+    if(keys["a"] || touchMap["left"]) player.x-=player.speed;
+    if(keys["d"] || touchMap["right"]) player.x+=player.speed;
+    if((keys[" "] || touchMap["shoot"]) && player.shootCooldown<=0){
+        bullets.push({x:player.x+player.w,y:player.y+player.h/2-5,w:10,h:10});
+        player.shootCooldown=15;
+        shootSound.play().catch(()=>{});
+    }
+    if(player.shootCooldown>0) player.shootCooldown--;
+    bullets.forEach((b,i)=>{ b.x+=bulletSpeed; if(b.x>canvas.width) bullets.splice(i,1); });
+    enemies.forEach((e,ei)=>{
+        e.x-=e.speed;
+        e.shootTimer--;
+        if(e.shootTimer<=0){ enemyBullets.push({x:e.x,y:e.y+e.h/2-5,w:10,h:10}); e.shootTimer=100+Math.floor(Math.random()*50); }
+        bullets.forEach((b,bi)=>{ if(isColliding(e,b)){ createParticles(e.x+e.w/2,e.y+e.h/2,"red",20); enemies.splice(ei,1); bullets.splice(bi,1); score+=10; hitSound.play().catch(()=>{}); updateLevel(); }});
+        if(isColliding(player,e)) endGame();
+    });
+    enemyBullets.forEach((eb,ei)=>{ eb.x-=enemyBulletSpeed; if(isColliding(player,eb)) endGame(); if(eb.x<0) enemyBullets.splice(ei,1); });
+    updateParticles();
+}
+
+function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle="#222"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(playerImg,player.x,player.y,player.w,player.h);
+    enemies.forEach(e=>ctx.drawImage(enemyImg,e.x,e.y,e.w,e.h));
+    ctx.fillStyle="cyan"; bullets.forEach(b=>ctx.fillRect(b.x,b.y,b.w,b.h));
+    ctx.fillStyle="orange"; enemyBullets.forEach(eb=>ctx.fillRect(eb.x,eb.y,eb.w,eb.h));
+    drawParticles();
+    ctx.fillStyle="white"; ctx.font="20px Arial";
+    ctx.fillText("Puntos: "+score,canvas.width-150,30);
+    ctx.fillText("Nivel: "+level,canvas.width-150,60);
+    ctx.fillText("Siguiente nivel: "+nextLevelScore+" pts",canvas.width-200,90);
+}
+
+function gameLoop(){ update(); draw(); if(gameRunning) requestAnimationFrame(gameLoop); }
+function spawnLoop(){ if(gameRunning){ spawnEnemy(); setTimeout(spawnLoop,spawnInterval); } }
+function startGame(){ player.x=100; player.y=250; bullets=[]; enemyBullets=[]; enemies=[]; particles=[]; score=0; level=1; nextLevelScore=100; enemySpeed=2; spawnInterval=2000; gameRunning=true; bgMusic.currentTime=0; bgMusic.play().catch(()=>{}); spawnLoop(); gameLoop(); }
+function endGame(){ gameRunning=false; bgMusic.pause(); setTimeout(()=>{ document.getElementById("finalScore").innerHTML="Puntos: "+score+" | Nivel: "+level; document.getElementById("gameOverScreen").style.display="flex"; },300); }
+
+document.getElementById("startBtn").onclick = startGame;
+document.getElementById("restartBtn").onclick = function(){ document.getElementById("gameOverScreen").style.display="none"; startGame(); };
+</script>
+</body>
+</html>
